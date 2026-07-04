@@ -1,0 +1,6 @@
+{
+  "name": "App Inspector",
+  "description": "Powerful APK Extractor and SDK Monitor with Background Runtime Tracking, Permission Management, and SDK Analytics under a gorgeous Vibrant Palette.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
