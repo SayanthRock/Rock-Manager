@@ -16,9 +16,15 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.items
+import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -59,16 +65,25 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme {
-                val factory = remember {
-                    object : ViewModelProvider.Factory {
-                        @Suppress("UNCHECKED_CAST")
-                        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                            return AppInspectorViewModel(application) as T
-                        }
+            val factory = remember {
+                object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                        return AppInspectorViewModel(application) as T
                     }
                 }
-                val viewModel: AppInspectorViewModel = viewModel(factory = factory)
+            }
+            val viewModel: AppInspectorViewModel = viewModel(factory = factory)
+            val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+            val isSystemDark = isSystemInDarkTheme()
+            val darkTheme = remember(themeMode, isSystemDark) {
+                when (themeMode) {
+                    "light" -> false
+                    "dark" -> true
+                    else -> isSystemDark
+                }
+            }
+            MyApplicationTheme(darkTheme = darkTheme) {
                 AppInspectorApp(viewModel)
             }
         }
@@ -80,9 +95,12 @@ fun AppInspectorApp(viewModel: AppInspectorViewModel) {
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
     val apps by viewModel.installedApps.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
 
     var selectedAppDetails by remember { mutableStateOf<InstalledAppInfo?>(null) }
+    var appToExploreAssets by remember { mutableStateOf<InstalledAppInfo?>(null) }
     var showPermissionsDialog by remember { mutableStateOf(false) }
+    var showThemeDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -116,7 +134,8 @@ fun AppInspectorApp(viewModel: AppInspectorViewModel) {
                     viewModel = viewModel
                 )
                 "Settings" -> SettingsScreen(
-                    viewModel = viewModel
+                    viewModel = viewModel,
+                    onAppearanceClick = { showThemeDialog = true }
                 )
             }
 
@@ -154,7 +173,20 @@ fun AppInspectorApp(viewModel: AppInspectorViewModel) {
                     onExtract = {
                         viewModel.extractApk(app)
                         selectedAppDetails = null
+                    },
+                    onExploreAssets = {
+                        appToExploreAssets = app
+                        selectedAppDetails = null
                     }
+                )
+            }
+
+            // APK Asset Explorer Bottom Sheet (PNG icons / images inside)
+            appToExploreAssets?.let { app ->
+                ApkAssetsBottomSheet(
+                    app = app,
+                    viewModel = viewModel,
+                    onDismiss = { appToExploreAssets = null }
                 )
             }
 
@@ -167,6 +199,18 @@ fun AppInspectorApp(viewModel: AppInspectorViewModel) {
                         selectedAppDetails = app
                         showPermissionsDialog = false
                     }
+                )
+            }
+
+            // Theme Selection Dialog (Appearance Selector)
+            if (showThemeDialog) {
+                ThemeSelectionDialog(
+                    themeMode = themeMode,
+                    onThemeSelected = { mode ->
+                        viewModel.setThemeMode(mode)
+                        showThemeDialog = false
+                    },
+                    onDismiss = { showThemeDialog = false }
                 )
             }
         }
@@ -257,6 +301,10 @@ fun HomeScreen(
 
     val highestAppInfo = remember(highestActivity, apps) {
         apps.find { it.packageName == highestActivity?.packageName }
+    }
+
+    val maxAppSize = remember(apps) {
+        apps.maxOfOrNull { it.totalSize }?.coerceAtLeast(1L) ?: 1L
     }
 
     Column(
@@ -574,6 +622,7 @@ fun HomeScreen(
                 items(recentApps) { app ->
                     AppListItem(
                         app = app,
+                        maxAppSize = maxAppSize,
                         onClick = { onAppClicked(app) },
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
@@ -586,6 +635,11 @@ fun HomeScreen(
 // ==========================================
 // 2. ALL INSTALLED APPS SCREEN
 // ==========================================
+enum class SortOption {
+    NAME,
+    INSTALL_DATE
+}
+
 @Composable
 fun AllAppsScreen(
     viewModel: AppInspectorViewModel,
@@ -596,17 +650,27 @@ fun AllAppsScreen(
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isSystemFilter by viewModel.isSystemFilter.collectAsStateWithLifecycle()
 
-    val filteredApps = remember(apps, searchQuery, isSystemFilter) {
-        apps.filter { app ->
+    var sortBy by remember { mutableStateOf(SortOption.NAME) }
+
+    val filteredApps = remember(apps, searchQuery, isSystemFilter, sortBy) {
+        val filtered = apps.filter { app ->
             val matchesSearch = app.name.contains(searchQuery, ignoreCase = true) ||
                     app.packageName.contains(searchQuery, ignoreCase = true)
             val matchesFilter = app.isSystem == isSystemFilter
             matchesSearch && matchesFilter
         }
+        when (sortBy) {
+            SortOption.NAME -> filtered.sortedBy { it.name.lowercase() }
+            SortOption.INSTALL_DATE -> filtered.sortedByDescending { it.installTime }
+        }
     }
 
     val userAppsCount = remember(apps) { apps.count { !it.isSystem } }
     val systemAppsCount = remember(apps) { apps.count { it.isSystem } }
+
+    val maxAppSize = remember(apps) {
+        apps.maxOfOrNull { it.totalSize }?.coerceAtLeast(1L) ?: 1L
+    }
 
     Column(
         modifier = Modifier
@@ -673,6 +737,87 @@ fun AllAppsScreen(
 
         Spacer(modifier = Modifier.height(4.dp))
 
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "${filteredApps.size} apps found",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary,
+                fontWeight = FontWeight.Medium
+            )
+
+            Box {
+                var expanded by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { expanded = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.List,
+                        contentDescription = "Sort Options",
+                        tint = AccentPurple,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = when (sortBy) {
+                            SortOption.NAME -> "Name (A-Z)"
+                            SortOption.INSTALL_DATE -> "Install Date"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = AccentPurple
+                    )
+                    Text(
+                        text = "▼",
+                        fontSize = 10.sp,
+                        color = AccentPurple
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier.background(Color.White)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Name (A-Z)", color = TextPrimary) },
+                        onClick = {
+                            sortBy = SortOption.NAME
+                            expanded = false
+                        },
+                        leadingIcon = {
+                            if (sortBy == SortOption.NAME) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = AccentPurple)
+                            }
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Installation Date", color = TextPrimary) },
+                        onClick = {
+                            sortBy = SortOption.INSTALL_DATE
+                            expanded = false
+                        },
+                        leadingIcon = {
+                            if (sortBy == SortOption.INSTALL_DATE) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = AccentPurple)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
         if (isLoading) {
             Box(
                 modifier = Modifier
@@ -713,6 +858,7 @@ fun AllAppsScreen(
                 items(filteredApps) { app ->
                     AppListItem(
                         app = app,
+                        maxAppSize = maxAppSize,
                         onClick = { onAppClicked(app) },
                         modifier = Modifier.testTag("app_item_${app.packageName}")
                     )
@@ -1320,7 +1466,8 @@ fun getChartColorForSdk(apiLevel: Int): Color {
 // ==========================================
 @Composable
 fun SettingsScreen(
-    viewModel: AppInspectorViewModel
+    viewModel: AppInspectorViewModel,
+    onAppearanceClick: () -> Unit
 ) {
     val signOutput by viewModel.signOutputApk.collectAsStateWithLifecycle()
     val autoMergeOpt by viewModel.autoMerge.collectAsStateWithLifecycle()
@@ -1328,6 +1475,18 @@ fun SettingsScreen(
     val showSplitSel by viewModel.showSplitSelection.collectAsStateWithLifecycle()
     val forceMrg by viewModel.forceMerge.collectAsStateWithLifecycle()
     val bgSync by viewModel.backgroundSync.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+
+    var showPrivacyDialog by remember { mutableStateOf(false) }
+    var showLanguageDialog by remember { mutableStateOf(false) }
+
+    if (showPrivacyDialog) {
+        PrivacyPolicyDialog(onDismiss = { showPrivacyDialog = false })
+    }
+
+    if (showLanguageDialog) {
+        LanguageSelectionDialog(onDismiss = { showLanguageDialog = false })
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -1341,7 +1500,7 @@ fun SettingsScreen(
                 text = "Settings",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.ExtraBold,
-                color = TextPrimary,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
             )
         }
@@ -1373,13 +1532,13 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(14.dp))
                     Column {
                         Text(
-                            text = "Support Split APKs Extractor",
+                            text = "App Inspector v1.2.0 (Build 12)",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
-                            text = "Developed securely for Android devices. Tap to check latest rules.",
+                            text = "Developed securely for local Android audits. Privacy prioritized.",
                             color = Color.White.copy(alpha = 0.7f),
                             fontSize = 11.sp,
                             lineHeight = 14.sp
@@ -1387,6 +1546,38 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
+
+        item {
+            PreferenceHeader(title = "GENERAL")
+        }
+
+        item {
+            PreferenceValue(
+                title = "Appearance",
+                value = when (themeMode) {
+                    "light" -> "Light"
+                    "dark" -> "Dark"
+                    else -> "System"
+                },
+                onClick = onAppearanceClick
+            )
+        }
+
+        item {
+            PreferenceValue(
+                title = "Language",
+                value = "English (US)",
+                onClick = { showLanguageDialog = true }
+            )
+        }
+
+        item {
+            PreferenceValue(
+                title = "Privacy & Data Safety",
+                value = "View policies & details",
+                onClick = { showPrivacyDialog = true }
+            )
         }
 
         item {
@@ -1398,7 +1589,7 @@ fun SettingsScreen(
                 title = "Sign Output APK",
                 subtitle = "Applies V1 + V2 signatures after extraction automatically",
                 checked = signOutput,
-                onCheckedChange = { viewModel.signOutputApk.value = it }
+                onCheckedChange = { viewModel.savePref("sign_output_apk", it) }
             )
         }
 
@@ -1425,7 +1616,7 @@ fun SettingsScreen(
                 title = "Auto Extract Split Pack",
                 subtitle = "Extract base and device splits instantly to ZIP",
                 checked = autoMergeOpt,
-                onCheckedChange = { viewModel.autoMerge.value = it }
+                onCheckedChange = { viewModel.savePref("auto_merge", it) }
             )
         }
 
@@ -1434,7 +1625,7 @@ fun SettingsScreen(
                 title = "Auto-Select Splits",
                 subtitle = "Pre-select architecture and compatible system splits",
                 checked = autoSelectSplt,
-                onCheckedChange = { viewModel.autoSelectSplits.value = it }
+                onCheckedChange = { viewModel.savePref("auto_select_splits", it) }
             )
         }
 
@@ -1443,7 +1634,7 @@ fun SettingsScreen(
                 title = "Show Split Selection Dialog",
                 subtitle = "Always ask for split components before packaging",
                 checked = showSplitSel,
-                onCheckedChange = { viewModel.showSplitSelection.value = it }
+                onCheckedChange = { viewModel.savePref("show_split_selection", it) }
             )
         }
 
@@ -1452,7 +1643,7 @@ fun SettingsScreen(
                 title = "Force Extraction",
                 subtitle = "Bypass signature mismatch errors on deep packages",
                 checked = forceMrg,
-                onCheckedChange = { viewModel.forceMerge.value = it }
+                onCheckedChange = { viewModel.savePref("force_merge", it) }
             )
         }
 
@@ -1465,7 +1656,7 @@ fun SettingsScreen(
                 title = "Background Monitor",
                 subtitle = "Query running processes and track background active times dynamically",
                 checked = bgSync,
-                onCheckedChange = { viewModel.backgroundSync.value = it }
+                onCheckedChange = { viewModel.savePref("background_sync", it) }
             )
         }
     }
@@ -1479,7 +1670,8 @@ fun SettingsScreen(
 fun AppDetailsBottomSheet(
     app: InstalledAppInfo,
     onDismiss: () -> Unit,
-    onExtract: () -> Unit
+    onExtract: () -> Unit,
+    onExploreAssets: () -> Unit
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1663,7 +1855,86 @@ fun AppDetailsBottomSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+
+            val context = LocalContext.current
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // App Info button
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = android.net.Uri.parse("package:${app.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            // ignore
+                        }
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "App Info",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                // Play Store button
+                OutlinedButton(
+                    onClick = {
+                        try {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                data = android.net.Uri.parse("market://details?id=${app.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            try {
+                                val webIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                    data = android.net.Uri.parse("https://play.google.com/store/apps/details?id=${app.packageName}")
+                                }
+                                context.startActivity(webIntent)
+                            } catch (e2: Exception) {
+                                // ignore
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ShoppingCart,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Play Store",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             Button(
                 onClick = onExtract,
@@ -1679,6 +1950,27 @@ fun AppDetailsBottomSheet(
                 Text(
                     text = if (app.isSplit) "Extract Split APKs (ZIP)" else "Extract Base APK",
                     color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            OutlinedButton(
+                onClick = onExploreAssets,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentPurple),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.5.dp, AccentPurple),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("explore_assets_sheet_button")
+            ) {
+                Icon(Icons.Default.Star, contentDescription = null, tint = AccentPurple)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Explore & Download PNG Icons",
+                    color = AccentPurple,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -1928,6 +2220,7 @@ fun AppIconView(
 @Composable
 fun AppListItem(
     app: InstalledAppInfo,
+    maxAppSize: Long,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2002,6 +2295,30 @@ fun AppListItem(
                         color = if (app.isSplit) AccentPurple else TextSecondary
                     )
                 }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = formatFileSize(app.totalSize),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AccentPurple
+                    )
+                    LinearProgressIndicator(
+                        progress = { (app.totalSize.toFloat() / maxAppSize.toFloat()).coerceIn(0.01f, 1.0f) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(5.dp)
+                            .clip(RoundedCornerShape(2.5.dp)),
+                        color = AccentPurple,
+                        trackColor = ActionZipsBg
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(8.dp))
@@ -2030,6 +2347,13 @@ fun formatMinutes(minutes: Long): String {
     return if (rem == 0L) "${hours}h" else "${hours}h ${rem}m"
 }
 
+fun formatFileSize(size: Long): String {
+    if (size <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.toDouble())).toInt()
+    return String.format(java.util.Locale.US, "%.1f %s", size / Math.pow(1024.toDouble(), digitGroups.toDouble()), units[digitGroups])
+}
+
 @Composable
 fun PreferenceHeader(title: String) {
     Text(
@@ -2049,11 +2373,11 @@ fun PreferenceToggle(
     onCheckedChange: (Boolean) -> Unit
 ) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(20.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, BorderColor, RoundedCornerShape(20.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
     ) {
         Row(
             modifier = Modifier
@@ -2067,13 +2391,13 @@ fun PreferenceToggle(
                     text = title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(modifier = Modifier.width(16.dp))
@@ -2083,8 +2407,8 @@ fun PreferenceToggle(
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = AccentPurple,
-                    uncheckedThumbColor = TextSecondary,
-                    uncheckedTrackColor = BorderColor
+                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.outline
                 )
             )
         }
@@ -2094,14 +2418,22 @@ fun PreferenceToggle(
 @Composable
 fun PreferenceValue(
     title: String,
-    value: String
+    value: String,
+    onClick: (() -> Unit)? = null
 ) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(20.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, BorderColor, RoundedCornerShape(20.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+            .let { modifier ->
+                if (onClick != null) {
+                    modifier.clickable(onClick = onClick)
+                } else {
+                    modifier
+                }
+            }
     ) {
         Row(
             modifier = Modifier
@@ -2115,7 +2447,7 @@ fun PreferenceValue(
                     text = title,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
             Spacer(modifier = Modifier.width(16.dp))
@@ -2160,6 +2492,497 @@ fun InfoBlock(
                 color = AccentPurple,
                 textAlign = TextAlign.Center
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ApkAssetsBottomSheet(
+    app: InstalledAppInfo,
+    viewModel: AppInspectorViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var isLoading by remember { mutableStateOf(true) }
+    var assets by remember { mutableStateOf<List<com.example.model.ApkPngAsset>>(emptyList()) }
+    var searchQuery by remember { mutableStateOf("") }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(app) {
+        viewModel.loadApkPngAssets(app) { loadedAssets ->
+            assets = loadedAssets
+            isLoading = false
+        }
+    }
+
+    val filteredAssets = remember(assets, searchQuery) {
+        assets.filter { it.name.contains(searchQuery, ignoreCase = true) || it.path.contains(searchQuery, ignoreCase = true) }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = BackgroundColor,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Scaffold(
+            containerColor = Color.Transparent,
+            snackbarHost = { SnackbarHost(snackbarHostState) }
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    AppIconView(
+                        drawable = app.icon,
+                        size = 48.dp,
+                        fallbackColor = AccentPurple
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "APK Asset Explorer",
+                            fontWeight = FontWeight.ExtraBold,
+                            color = TextPrimary,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = "${app.name} (${app.packageName})",
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("close_asset_explorer")
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Search Bar
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search PNG icons...", color = TextSecondary) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextSecondary)
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("search_png_icons_input"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        focusedBorderColor = AccentPurple,
+                        unfocusedBorderColor = BorderColor
+                    ),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = AccentPurple)
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Scanning APK for PNG resources...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                } else if (filteredAssets.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (assets.isEmpty()) "No PNG assets found in this APK." else "No assets match search query.",
+                            color = TextSecondary,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Found ${filteredAssets.size} PNG images inside the package:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    ) {
+                        items(filteredAssets) { asset ->
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, BorderColor, RoundedCornerShape(16.dp))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    // Display PNG thumbnail
+                                    Box(
+                                        modifier = Modifier
+                                            .size(80.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(ActionZipsBg)
+                                            .padding(6.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (asset.bitmap != null) {
+                                            androidx.compose.foundation.Image(
+                                                bitmap = asset.bitmap.asImageBitmap(),
+                                                contentDescription = asset.name,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    Text(
+                                        text = asset.name,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        color = TextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+
+                                    Text(
+                                        text = asset.path.substringBeforeLast("/").ifEmpty { "root" },
+                                        fontSize = 8.sp,
+                                        color = TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+
+                                    Text(
+                                        text = viewModel.formatFileSize(asset.sizeBytes),
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = AccentPurple,
+                                        modifier = Modifier.padding(vertical = 2.dp)
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        // Download button
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.downloadPngAsset(context, asset) { result ->
+                                                    coroutineScope.launch {
+                                                        if (result != null) {
+                                                            snackbarHostState.showSnackbar(result)
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(34.dp)
+                                                .background(ActionZipsBg, RoundedCornerShape(8.dp))
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.KeyboardArrowDown,
+                                                contentDescription = "Save to Pictures",
+                                                tint = AccentPurple,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        // Share button
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.sharePngAsset(context, asset)
+                                            },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(34.dp)
+                                                .background(ActionPermsBg, RoundedCornerShape(8.dp))
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Share,
+                                                contentDescription = "Share Image",
+                                                tint = ActionPermsText,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 8. THEME & GENERAL DIALOGS
+// ==========================================
+
+@Composable
+fun ThemeSelectionDialog(
+    themeMode: String,
+    onThemeSelected: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                Text(
+                    text = "Appearance",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                val options = listOf(
+                    Triple("light", "Light", "Light"),
+                    Triple("dark", "Dark", "Dark"),
+                    Triple("system", "System (Default)", "System")
+                )
+
+                options.forEach { (mode, label, testTagSuffix) ->
+                    val isSelected = themeMode == mode
+                    val rowBg = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                    } else {
+                        Color.Transparent
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(rowBg)
+                            .clickable { onThemeSelected(mode) }
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = isSelected,
+                            onClick = { onThemeSelected(mode) },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = AccentPurple,
+                                unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("theme_cancel_button")
+                    ) {
+                        Text(
+                            text = "Cancel",
+                            fontWeight = FontWeight.Bold,
+                            color = AccentPurple
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PrivacyPolicyDialog(onDismiss: () -> Unit) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                Text(
+                    text = "Privacy & Data Safety",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                Text(
+                    text = "App Inspector operates 100% locally on your device. We do not have servers, and we never collect, transmit, or share any of your personal details, list of installed applications, extracted APK packages, or asset directories.\n\nAll operations—including APK packaging, code signature generation, and binary analysis—happen purely on-device securely and without internet intervention.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 20.sp
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text(
+                            text = "Dismiss",
+                            fontWeight = FontWeight.Bold,
+                            color = AccentPurple
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LanguageSelectionDialog(onDismiss: () -> Unit) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                Text(
+                    text = "Language Selection",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = true,
+                        onClick = {},
+                        colors = RadioButtonDefaults.colors(selectedColor = AccentPurple)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "English (US) - Active",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Support for multilingual translations is currently being compiled and will be available in the upcoming dynamic release cycle.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text(
+                            text = "Close",
+                            fontWeight = FontWeight.Bold,
+                            color = AccentPurple
+                        )
+                    }
+                }
+            }
         }
     }
 }

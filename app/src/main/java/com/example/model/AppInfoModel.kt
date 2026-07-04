@@ -22,7 +22,8 @@ data class InstalledAppInfo(
     val permissions: List<PermissionModel>,
     val isSystem: Boolean,
     val installTime: Long,
-    val updateTime: Long
+    val updateTime: Long,
+    val totalSize: Long
 ) {
     val sdkLabel: String = getSdkName(targetSdkVersion)
     val isSplit: Boolean = splitApkPaths.isNotEmpty()
@@ -46,3 +47,10 @@ data class InstalledAppInfo(
         }
     }
 }
+
+data class ApkPngAsset(
+    val name: String,
+    val path: String,
+    val sizeBytes: Long,
+    val bitmap: android.graphics.Bitmap?
+)
