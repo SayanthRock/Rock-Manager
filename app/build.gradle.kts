@@ -2,7 +2,6 @@ import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesS
 
 plugins {
   alias(libs.plugins.android.application)
-  id("org.jetbrains.kotlin.android")
   alias(libs.plugins.kotlin.compose)
   id("com.google.devtools.ksp")
   alias(libs.plugins.roborazzi)
