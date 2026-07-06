@@ -23,7 +23,8 @@ data class InstalledAppInfo(
     val isSystem: Boolean,
     val installTime: Long,
     val updateTime: Long,
-    val totalSize: Long
+    val totalSize: Long,
+    val isLaunchable: Boolean = false
 ) {
     val sdkLabel: String = getSdkName(targetSdkVersion)
     val isSplit: Boolean = splitApkPaths.isNotEmpty()

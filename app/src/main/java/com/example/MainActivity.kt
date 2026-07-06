@@ -16,10 +16,14 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.items
@@ -370,6 +374,11 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
+            // ⚡ OPTIMIZATION CONTROL CENTER
+            item {
+                OptimizationControlCenter(viewModel = viewModel)
+            }
+
             // Highest Activity Feature Card
             item {
                 Card(
@@ -648,15 +657,20 @@ fun AllAppsScreen(
     val apps by viewModel.installedApps.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val isSystemFilter by viewModel.isSystemFilter.collectAsStateWithLifecycle()
+    val smartFilter by viewModel.smartFilter.collectAsStateWithLifecycle()
 
     var sortBy by remember { mutableStateOf(SortOption.NAME) }
 
-    val filteredApps = remember(apps, searchQuery, isSystemFilter, sortBy) {
+    val filteredApps = remember(apps, searchQuery, smartFilter, sortBy) {
         val filtered = apps.filter { app ->
             val matchesSearch = app.name.contains(searchQuery, ignoreCase = true) ||
                     app.packageName.contains(searchQuery, ignoreCase = true)
-            val matchesFilter = app.isSystem == isSystemFilter
+            val matchesFilter = when (smartFilter) {
+                "user" -> !app.isSystem
+                "launchable" -> app.isLaunchable
+                "system" -> app.isSystem
+                else -> true
+            }
             matchesSearch && matchesFilter
         }
         when (sortBy) {
@@ -666,6 +680,7 @@ fun AllAppsScreen(
     }
 
     val userAppsCount = remember(apps) { apps.count { !it.isSystem } }
+    val launchableAppsCount = remember(apps) { apps.count { it.isLaunchable } }
     val systemAppsCount = remember(apps) { apps.count { it.isSystem } }
 
     val maxAppSize = remember(apps) {
@@ -719,18 +734,24 @@ fun AllAppsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             FilterTabButton(
                 text = "User ($userAppsCount)",
-                isSelected = !isSystemFilter,
-                onClick = { viewModel.setSystemFilter(false) },
+                isSelected = smartFilter == "user",
+                onClick = { viewModel.setSmartFilter("user") },
                 modifier = Modifier.weight(1f)
             )
             FilterTabButton(
+                text = "Launchable ($launchableAppsCount)",
+                isSelected = smartFilter == "launchable",
+                onClick = { viewModel.setSmartFilter("launchable") },
+                modifier = Modifier.weight(1.2f)
+            )
+            FilterTabButton(
                 text = "System ($systemAppsCount)",
-                isSelected = isSystemFilter,
-                onClick = { viewModel.setSystemFilter(true) },
+                isSelected = smartFilter == "system",
+                onClick = { viewModel.setSmartFilter("system") },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -2218,6 +2239,186 @@ fun AppIconView(
 }
 
 @Composable
+fun SwipeableAppListItem(
+    app: InstalledAppInfo,
+    maxAppSize: Long,
+    onClick: () -> Unit,
+    onSwipeToExtract: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var offsetX by remember { mutableStateOf(0f) }
+    val swipeThreshold = 300f // Swipe threshold in pixels
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color(0xFFF3E5F5)) // Beautiful Lavender/Purple underlay
+    ) {
+        // Underlay extraction indicators
+        Row(
+            modifier = Modifier
+                .fillMatchParentSize()
+                .padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (offsetX > 0) Arrangement.Start else Arrangement.End
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Share,
+                    contentDescription = "Extract APK",
+                    tint = AccentPurple
+                )
+                Text(
+                    text = "Release to Extract",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    color = AccentPurple
+                )
+            }
+        }
+
+        // Foreground: The actual AppListItem content
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(offsetX.roundToInt(), 0) }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (java.lang.Math.abs(offsetX) > swipeThreshold) {
+                                onSwipeToExtract()
+                            }
+                            offsetX = 0f
+                        },
+                        onDragCancel = {
+                            offsetX = 0f
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            // Clamp swipe limits to prevent excessive drag
+                            offsetX = (offsetX + dragAmount).coerceIn(-400f, 400f)
+                        }
+                    )
+                }
+                .border(1.dp, BorderColor, RoundedCornerShape(20.dp))
+                .clickable { onClick() }
+        ) {
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AppIconView(
+                    drawable = app.icon,
+                    size = 44.dp,
+                    fallbackColor = if (app.isSplit) AccentPurple else Color(0xFF4CAF50)
+                )
+
+                Spacer(modifier = Modifier.width(14.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = app.name,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(1.dp))
+                    Text(
+                        text = app.packageName,
+                        fontSize = 10.sp,
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "v${app.versionName}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = "•",
+                            fontSize = 10.sp,
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = "${app.permissions.size} Perms",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = "•",
+                            fontSize = 10.sp,
+                            color = TextSecondary
+                        )
+                        Text(
+                            text = if (app.isSplit) "${app.splitApkPaths.size + 1} splits" else "Single APK",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (app.isSplit) AccentPurple else TextSecondary
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = formatFileSize(app.totalSize),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentPurple
+                        )
+                        LinearProgressIndicator(
+                            progress = { (app.totalSize.toFloat() / maxAppSize.toFloat()).coerceIn(0.01f, 1.0f) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(5.dp)
+                                .clip(RoundedCornerShape(2.5.dp)),
+                            color = AccentPurple,
+                            trackColor = ActionZipsBg
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (app.targetSdkVersion >= 35) ActionZipsBg else Color(0xFFE2E2E2))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "API ${app.targetSdkVersion}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (app.targetSdkVersion >= 35) ActionZipsText else TextSecondary
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun AppListItem(
     app: InstalledAppInfo,
     maxAppSize: Long,
@@ -2760,6 +2961,404 @@ fun ApkAssetsBottomSheet(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun ExclusionListDialog(
+    viewModel: AppInspectorViewModel,
+    onDismiss: () -> Unit
+) {
+    val apps by viewModel.installedApps.collectAsStateWithLifecycle()
+    val exclusions by viewModel.exclusions.collectAsStateWithLifecycle()
+    var query by remember { mutableStateOf("") }
+
+    val filteredApps = remember(apps, query) {
+        apps.filter { it.name.contains(query, ignoreCase = true) || it.packageName.contains(query, ignoreCase = true) }
+    }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                Text(
+                    text = "🛡️ Exclusion Whitelist",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Whitelist important apps to keep them running during optimization.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search apps...", fontSize = 14.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(filteredApps) { app ->
+                        val isExcluded = exclusions.contains(app.packageName)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { viewModel.toggleExclusion(app.packageName) }
+                                .padding(vertical = 6.dp, horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isExcluded,
+                                onCheckedChange = { viewModel.toggleExclusion(app.packageName) }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = app.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = app.packageName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Done", fontWeight = FontWeight.Bold, color = AccentPurple)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun OptimizationControlCenter(viewModel: AppInspectorViewModel) {
+    val activities by viewModel.backgroundActivities.collectAsStateWithLifecycle()
+    val isOptimizing by viewModel.isOptimizing.collectAsStateWithLifecycle()
+    val killerMode by viewModel.killerMode.collectAsStateWithLifecycle()
+    val batterySaver by viewModel.batterySaver.collectAsStateWithLifecycle()
+    val performanceBoost by viewModel.performanceBoost.collectAsStateWithLifecycle()
+    val exclusions by viewModel.exclusions.collectAsStateWithLifecycle()
+
+    var showExclusionsDialog by remember { mutableStateOf(false) }
+
+    val liveAppsCount = remember(activities) { activities.count { it.isLive } }
+    val totalCpuLoad = remember(activities) {
+        activities.filter { it.isLive }.sumOf { it.cpuUsagePercent.toDouble() }.toFloat()
+    }
+
+    if (showExclusionsDialog) {
+        ExclusionListDialog(
+            viewModel = viewModel,
+            onDismiss = { showExclusionsDialog = false }
+        )
+    }
+
+    Card(
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 4.dp)
+            .testTag("optimization_control_center")
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "OPTIMIZATION SYSTEM",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = TextSecondary,
+                        letterSpacing = 1.2.sp
+                    )
+                    Text(
+                        text = "Task Controller",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = TextPrimary
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (liveAppsCount > 0) ActionPermsBg else ActionZipsBg)
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "$liveAppsCount Active",
+                        color = if (liveAppsCount > 0) ActionPermsText else ActionZipsText,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                        .padding(12.dp)
+                ) {
+                    Column {
+                        Text("CPU LOAD", style = MaterialTheme.typography.labelSmall, color = TextSecondary, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${String.format("%.1f", totalCpuLoad)}%",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (totalCpuLoad > 30f) Color(0xFFD32F2F) else Color(0xFF388E3C)
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                        .clickable { showExclusionsDialog = true }
+                        .padding(12.dp)
+                ) {
+                    Column {
+                        Text("WHITELIST", style = MaterialTheme.typography.labelSmall, color = TextSecondary, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "${exclusions.size} Apps",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = AccentPurple,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit Whitelist",
+                                tint = AccentPurple,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = { viewModel.optimizeOneClick() },
+                enabled = !isOptimizing,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AccentPurple),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .testTag("quick_optimize_button")
+            ) {
+                if (isOptimizing) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Build,
+                        contentDescription = "Optimize",
+                        tint = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "⚡ Run One-Click Optimize",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color.White
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "🛡️ KILLER TERMINATION MODE",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = TextSecondary,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val modes = listOf(
+                    Triple("default", "Standard", "Default API force stop"),
+                    Triple("root", "Root SU", "Superuser automation"),
+                    Triple("shizuku", "Shizuku", "AADB shell termination")
+                )
+
+                modes.forEach { (mode, label, description) ->
+                    val isSelected = killerMode == mode
+                    val modeBg = if (isSelected) AccentPurple else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    val modeText = if (isSelected) Color.White else TextPrimary
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(modeBg)
+                            .clickable { viewModel.setKillerMode(mode) }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            color = modeText,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFE8F5E9)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Favorite,
+                            contentDescription = null,
+                            tint = Color(0xFF2E7D32),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "🔋 Battery Saver",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "Auto-hibernates long-running background tasks",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+                Switch(
+                    checked = batterySaver,
+                    onCheckedChange = { viewModel.savePref("battery_saver", it) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFE3F2FD)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = Color(0xFF1565C0),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "🚀 Performance Boost",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "Free up CPU limits and clear active memory",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+                Switch(
+                    checked = performanceBoost,
+                    onCheckedChange = { viewModel.savePref("performance_boost", it) }
+                )
             }
         }
     }
