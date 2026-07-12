@@ -52,6 +52,9 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
+    private val _selectedPermissionFilter = MutableStateFlow<String?>(null)
+    val selectedPermissionFilter: StateFlow<String?> = _selectedPermissionFilter.asStateFlow()
+
     private val _selectedTab = MutableStateFlow("Home") // Home, Apps, Logs, Analytics, Settings
     val selectedTab: StateFlow<String> = _selectedTab.asStateFlow()
 
@@ -225,6 +228,10 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
+    }
+
+    fun setSelectedPermissionFilter(permission: String?) {
+        _selectedPermissionFilter.value = permission
     }
 
     fun setSystemFilter(isSystem: Boolean) {

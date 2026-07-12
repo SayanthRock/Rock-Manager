@@ -20,6 +20,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
@@ -658,20 +659,25 @@ fun AllAppsScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val smartFilter by viewModel.smartFilter.collectAsStateWithLifecycle()
+    val selectedPermissionFilter by viewModel.selectedPermissionFilter.collectAsStateWithLifecycle()
 
     var sortBy by remember { mutableStateOf(SortOption.NAME) }
 
-    val filteredApps = remember(apps, searchQuery, smartFilter, sortBy) {
+    val filteredApps = remember(apps, searchQuery, smartFilter, selectedPermissionFilter, sortBy) {
         val filtered = apps.filter { app ->
             val matchesSearch = app.name.contains(searchQuery, ignoreCase = true) ||
-                    app.packageName.contains(searchQuery, ignoreCase = true)
+                    app.packageName.contains(searchQuery, ignoreCase = true) ||
+                    app.permissions.any { it.name.contains(searchQuery, ignoreCase = true) }
             val matchesFilter = when (smartFilter) {
                 "user" -> !app.isSystem
                 "launchable" -> app.isLaunchable
                 "system" -> app.isSystem
                 else -> true
             }
-            matchesSearch && matchesFilter
+            val matchesPermission = selectedPermissionFilter == null || app.permissions.any { perm ->
+                perm.name.contains(selectedPermissionFilter!!, ignoreCase = true)
+            }
+            matchesSearch && matchesFilter && matchesPermission
         }
         when (sortBy) {
             SortOption.NAME -> filtered.sortedBy { it.name.lowercase() }
@@ -729,6 +735,53 @@ fun AllAppsScreen(
             },
             singleLine = true
         )
+
+        val permissionsList = remember {
+            listOf(
+                Pair(null, "🔑 All"),
+                Pair("CAMERA", "📷 Camera"),
+                Pair("LOCATION", "📍 Location"),
+                Pair("CONTACTS", "👤 Contacts"),
+                Pair("STORAGE", "📁 Storage"),
+                Pair("MICROPHONE", "🎤 Mic"),
+                Pair("PHONE", "📞 Phone"),
+                Pair("SMS", "💬 SMS"),
+                Pair("CALENDAR", "📅 Calendar")
+            )
+        }
+
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 2.dp)
+        ) {
+            items(permissionsList) { (permKey, label) ->
+                val isSelected = selectedPermissionFilter == permKey
+                val bg = if (isSelected) AccentPurple else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                val textColor = if (isSelected) Color.White else TextPrimary
+                val borderCol = if (isSelected) AccentPurple else BorderColor
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(bg)
+                        .border(1.dp, borderCol, RoundedCornerShape(18.dp))
+                        .clickable { viewModel.setSelectedPermissionFilter(permKey) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .testTag("permission_chip_${permKey ?: "all"}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        color = textColor,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
 
         Row(
             modifier = Modifier
@@ -2258,7 +2311,7 @@ fun SwipeableAppListItem(
         // Underlay extraction indicators
         Row(
             modifier = Modifier
-                .fillMatchParentSize()
+                .matchParentSize()
                 .padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (offsetX > 0) Arrangement.Start else Arrangement.End
