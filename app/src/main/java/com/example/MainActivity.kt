@@ -64,6 +64,23 @@ import com.example.ui.theme.*
 import com.example.viewmodel.AppInspectorViewModel
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.runtime.ReadOnlyComposable
+
+// Dynamic Theme Color Mapping Properties
+val BackgroundColor: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.background
+val BorderColor: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.outline
+val AccentPurple: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.primary
+val AccentPurpleLight: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.primaryContainer
+val TextPrimary: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.onBackground
+val TextSecondary: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.onSurfaceVariant
+val WhiteCardBg: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.surface
+val NavBackground: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.surfaceVariant
+val HeaderViolet: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.primaryContainer
+val OnHeaderViolet: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.onPrimaryContainer
+val ActionZipsBg: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.secondary
+val ActionZipsText: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.onSecondary
+val ActionPermsBg: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.tertiary
+val ActionPermsText: Color @Composable @ReadOnlyComposable get() = MaterialTheme.colorScheme.onTertiary
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,7 +105,10 @@ class MainActivity : ComponentActivity() {
                     else -> isSystemDark
                 }
             }
-            MyApplicationTheme(darkTheme = darkTheme) {
+            val useDynamicColor = remember(themeMode) {
+                themeMode == "system"
+            }
+            MyApplicationTheme(darkTheme = darkTheme, dynamicColor = useDynamicColor) {
                 AppInspectorApp(viewModel)
             }
         }
@@ -661,6 +681,11 @@ fun AllAppsScreen(
     val smartFilter by viewModel.smartFilter.collectAsStateWithLifecycle()
     val selectedPermissionFilter by viewModel.selectedPermissionFilter.collectAsStateWithLifecycle()
 
+    val isBatchMode by viewModel.isBatchMode.collectAsStateWithLifecycle()
+    val selectedAppsForBatch by viewModel.selectedAppsForBatch.collectAsStateWithLifecycle()
+    val batchExtractionProgress by viewModel.batchExtractionProgress.collectAsStateWithLifecycle()
+    val batchExtractionStatus by viewModel.batchExtractionStatus.collectAsStateWithLifecycle()
+
     var sortBy by remember { mutableStateOf(SortOption.NAME) }
 
     val filteredApps = remember(apps, searchQuery, smartFilter, selectedPermissionFilter, sortBy) {
@@ -698,13 +723,74 @@ fun AllAppsScreen(
             .fillMaxSize()
             .padding(horizontal = 16.dp)
     ) {
-        Text(
-            text = "Installed Split Apps",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.ExtraBold,
-            color = TextPrimary,
-            modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp, bottom = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Installed Split Apps",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.ExtraBold,
+                color = TextPrimary
+            )
+        }
+
+        // Batch Extraction Progress Banner
+        AnimatedVisibility(visible = batchExtractionProgress != null) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = ActionZipsBg),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+                    .border(1.dp, BorderColor, RoundedCornerShape(16.dp))
+                    .testTag("batch_extraction_progress_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = batchExtractionStatus ?: "Extracting apps...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentPurple
+                        )
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = AccentPurple
+                        )
+                    }
+                    
+                    val progressVal = batchExtractionProgress ?: 0f
+                    LinearProgressIndicator(
+                        progress = { progressVal },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        color = AccentPurple,
+                        trackColor = Color.White
+                    )
+                    
+                    Text(
+                        text = "${(progressVal * 100).toInt()}% completed",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextSecondary
+                    )
+                }
+            }
+        }
 
         OutlinedTextField(
             value = searchQuery,
@@ -814,83 +900,180 @@ fun AllAppsScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 4.dp),
+                .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = "${filteredApps.size} apps found",
-                style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary,
-                fontWeight = FontWeight.Medium
-            )
-
-            Box {
-                var expanded by remember { mutableStateOf(false) }
+            if (isBatchMode) {
                 Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable { expanded = true }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.List,
-                        contentDescription = "Sort Options",
-                        tint = AccentPurple,
-                        modifier = Modifier.size(16.dp)
-                    )
                     Text(
-                        text = when (sortBy) {
-                            SortOption.NAME -> "Name (A-Z)"
-                            SortOption.INSTALL_DATE -> "Install Date"
-                        },
+                        text = "${selectedAppsForBatch.size} Selected",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AccentPurple,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    
+                    Text(
+                        text = "•",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                    
+                    Text(
+                        text = if (selectedAppsForBatch.size == filteredApps.size) "Deselect All" else "Select All",
                         style = MaterialTheme.typography.bodySmall,
+                        color = TextPrimary,
                         fontWeight = FontWeight.Bold,
-                        color = AccentPurple
-                    )
-                    Text(
-                        text = "▼",
-                        fontSize = 10.sp,
-                        color = AccentPurple
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable {
+                                if (selectedAppsForBatch.size == filteredApps.size) {
+                                    viewModel.clearBatchSelection()
+                                } else {
+                                    viewModel.selectAllAppsInList(filteredApps)
+                                }
+                            }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .testTag("batch_select_all_toggle")
                     )
                 }
-
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                    modifier = Modifier.background(Color.White)
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("Name (A-Z)", color = TextPrimary) },
-                        onClick = {
-                            sortBy = SortOption.NAME
-                            expanded = false
-                        },
-                        leadingIcon = {
-                            if (sortBy == SortOption.NAME) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = AccentPurple)
-                            }
+                    Button(
+                        onClick = { viewModel.toggleBatchMode() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = TextSecondary),
+                        border = BorderStroke(1.dp, BorderColor),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("batch_cancel_button")
+                    ) {
+                        Text("Cancel", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    
+                    Button(
+                        onClick = { viewModel.extractBatchApks() },
+                        enabled = selectedAppsForBatch.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentPurple, contentColor = Color.White),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("batch_extract_action_button")
+                    ) {
+                        Text("Extract (${selectedAppsForBatch.size})", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                Text(
+                    text = "${filteredApps.size} apps found",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                    fontWeight = FontWeight.Medium
+                )
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // "Batch Mode" Toggle Button
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, BorderColor, RoundedCornerShape(8.dp))
+                            .clickable { viewModel.toggleBatchMode() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("batch_mode_toggle_btn"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Batch Select",
+                            tint = AccentPurple,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Batch Select",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentPurple
+                        )
+                    }
+                    
+                    Box {
+                        var expanded by remember { mutableStateOf(false) }
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { expanded = true }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.List,
+                                contentDescription = "Sort Options",
+                                tint = AccentPurple,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = when (sortBy) {
+                                    SortOption.NAME -> "Name (A-Z)"
+                                    SortOption.INSTALL_DATE -> "Install Date"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = AccentPurple
+                            )
+                            Text(
+                                text = "▼",
+                                fontSize = 10.sp,
+                                color = AccentPurple
+                            )
                         }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Installation Date", color = TextPrimary) },
-                        onClick = {
-                            sortBy = SortOption.INSTALL_DATE
-                            expanded = false
-                        },
-                        leadingIcon = {
-                            if (sortBy == SortOption.INSTALL_DATE) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = AccentPurple)
-                            }
+
+                        DropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false },
+                            modifier = Modifier.background(Color.White)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Name (A-Z)", color = TextPrimary) },
+                                onClick = {
+                                    sortBy = SortOption.NAME
+                                    expanded = false
+                                },
+                                leadingIcon = {
+                                    if (sortBy == SortOption.NAME) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = AccentPurple)
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Installation Date", color = TextPrimary) },
+                                onClick = {
+                                    sortBy = SortOption.INSTALL_DATE
+                                    expanded = false
+                                },
+                                leadingIcon = {
+                                    if (sortBy == SortOption.INSTALL_DATE) {
+                                        Icon(Icons.Default.Check, contentDescription = null, tint = AccentPurple)
+                                    }
+                                }
+                            )
                         }
-                    )
+                    }
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(4.dp))
 
         if (isLoading) {
             Box(
@@ -930,9 +1113,13 @@ fun AllAppsScreen(
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
                 items(filteredApps) { app ->
+                    val isSelected = selectedAppsForBatch.contains(app.packageName)
                     AppListItem(
                         app = app,
                         maxAppSize = maxAppSize,
+                        isBatchMode = isBatchMode,
+                        isSelected = isSelected,
+                        onToggleSelect = { viewModel.toggleAppBatchSelection(app.packageName) },
                         onClick = { onAppClicked(app) },
                         modifier = Modifier.testTag("app_item_${app.packageName}")
                     )
@@ -2476,20 +2663,47 @@ fun AppListItem(
     app: InstalledAppInfo,
     maxAppSize: Long,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isBatchMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelect: () -> Unit = {}
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         shape = RoundedCornerShape(20.dp),
         modifier = modifier
             .fillMaxWidth()
-            .border(1.dp, BorderColor, RoundedCornerShape(20.dp))
-            .clickable { onClick() }
+            .border(
+                width = if (isBatchMode && isSelected) 2.dp else 1.dp,
+                color = if (isBatchMode && isSelected) AccentPurple else BorderColor,
+                shape = RoundedCornerShape(20.dp)
+            )
+            .clickable {
+                if (isBatchMode) {
+                    onToggleSelect()
+                } else {
+                    onClick()
+                }
+            }
     ) {
         Row(
             modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (isBatchMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelect() },
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .testTag("app_checkbox_${app.packageName}"),
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = AccentPurple,
+                        checkmarkColor = Color.White
+                    )
+                )
+            }
+
             AppIconView(
                 drawable = app.icon,
                 size = 44.dp,

@@ -58,6 +58,18 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
     private val _selectedTab = MutableStateFlow("Home") // Home, Apps, Logs, Analytics, Settings
     val selectedTab: StateFlow<String> = _selectedTab.asStateFlow()
 
+    private val _isBatchMode = MutableStateFlow(false)
+    val isBatchMode: StateFlow<Boolean> = _isBatchMode.asStateFlow()
+
+    private val _selectedAppsForBatch = MutableStateFlow<Set<String>>(emptySet())
+    val selectedAppsForBatch: StateFlow<Set<String>> = _selectedAppsForBatch.asStateFlow()
+
+    private val _batchExtractionProgress = MutableStateFlow<Float?>(null)
+    val batchExtractionProgress: StateFlow<Float?> = _batchExtractionProgress.asStateFlow()
+
+    private val _batchExtractionStatus = MutableStateFlow<String?>(null)
+    val batchExtractionStatus: StateFlow<String?> = _batchExtractionStatus.asStateFlow()
+
     // Apps tab filter
     private val _isSystemFilter = MutableStateFlow(false) // false = User, true = System
     val isSystemFilter: StateFlow<Boolean> = _isSystemFilter.asStateFlow()
@@ -403,6 +415,136 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
                 e.printStackTrace()
                 _statusMessage.value = "Extraction failed: ${e.localizedMessage}"
             } finally {
+                delay(4000)
+                _statusMessage.value = null
+            }
+        }
+    }
+
+    fun toggleBatchMode() {
+        _isBatchMode.value = !_isBatchMode.value
+        if (!_isBatchMode.value) {
+            _selectedAppsForBatch.value = emptySet()
+        }
+    }
+
+    fun setBatchMode(active: Boolean) {
+        _isBatchMode.value = active
+        if (!active) {
+            _selectedAppsForBatch.value = emptySet()
+        }
+    }
+
+    fun toggleAppBatchSelection(packageName: String) {
+        val current = _selectedAppsForBatch.value
+        if (current.contains(packageName)) {
+            _selectedAppsForBatch.value = current - packageName
+        } else {
+            _selectedAppsForBatch.value = current + packageName
+        }
+    }
+
+    fun clearBatchSelection() {
+        _selectedAppsForBatch.value = emptySet()
+    }
+
+    fun selectAllAppsInList(apps: List<InstalledAppInfo>) {
+        _selectedAppsForBatch.value = apps.map { it.packageName }.toSet()
+    }
+
+    fun extractBatchApks() {
+        val selectedPackageNames = _selectedAppsForBatch.value
+        if (selectedPackageNames.isEmpty()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val allApps = _installedApps.value
+            val appsToExtract = allApps.filter { selectedPackageNames.contains(it.packageName) }
+            
+            if (appsToExtract.isEmpty()) return@launch
+
+            val totalCount = appsToExtract.size
+            val completedCount = java.util.concurrent.atomic.AtomicInteger(0)
+            
+            _statusMessage.value = "Starting batch extraction of $totalCount apps..."
+            _batchExtractionStatus.value = "Extracting 0 of $totalCount apps..."
+            _batchExtractionProgress.value = 0f
+
+            try {
+                val outputDir = File(context.filesDir, "extracted")
+                if (!outputDir.exists()) {
+                    outputDir.mkdirs()
+                }
+
+                // Run concurrent extractions in parallel
+                val jobs = appsToExtract.map { app ->
+                    launch {
+                        try {
+                            val formatTime = System.currentTimeMillis()
+                            val isSplit = app.isSplit
+                            val destFile: File
+
+                            if (isSplit) {
+                                destFile = File(outputDir, "${app.name.replace(" ", "_")}_split_$formatTime.zip")
+                                val filesToZip = mutableListOf<File>()
+                                filesToZip.add(File(app.baseApkPath))
+                                app.splitApkPaths.forEach { filesToZip.add(File(it)) }
+                                zipFiles(filesToZip, destFile)
+                            } else {
+                                destFile = File(outputDir, "${app.name.replace(" ", "_")}_$formatTime.apk")
+                                val srcFile = File(app.baseApkPath)
+                                srcFile.inputStream().use { input ->
+                                    destFile.outputStream().use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                            }
+
+                            val fileSize = destFile.length()
+                            val sizeStr = formatFileSize(fileSize)
+
+                            val log = ExtractionLog(
+                                appName = app.name,
+                                packageName = app.packageName,
+                                filePath = destFile.absolutePath,
+                                fileSizeFormatted = sizeStr,
+                                fileType = if (isSplit) "ZIP" else "APK",
+                                isSigned = signOutputApk.value
+                            )
+                            repository.insertExtractionLog(log)
+
+                            repository.insertSdkChangeLog(
+                                SdkChangeLog(
+                                    appName = app.name,
+                                    packageName = app.packageName,
+                                    changeType = "SDK Level",
+                                    description = "Extracted ${log.fileType} of ${app.name} (${sizeStr}) targeting API ${app.targetSdkVersion} in batch"
+                                )
+                            )
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        } finally {
+                            val finished = completedCount.incrementAndGet()
+                            _batchExtractionProgress.value = finished.toFloat() / totalCount.toFloat()
+                            _batchExtractionStatus.value = "Extracting $finished of $totalCount apps..."
+                        }
+                    }
+                }
+
+                // Wait for all to finish
+                jobs.forEach { it.join() }
+
+                _statusMessage.value = "Batch extraction of $totalCount apps completed!"
+                _batchExtractionStatus.value = "Completed! $totalCount apps extracted successfully."
+                delay(3000)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusMessage.value = "Batch extraction failed: ${e.localizedMessage}"
+            } finally {
+                _batchExtractionProgress.value = null
+                _batchExtractionStatus.value = null
+                _isBatchMode.value = false
+                _selectedAppsForBatch.value = emptySet()
                 delay(4000)
                 _statusMessage.value = null
             }
