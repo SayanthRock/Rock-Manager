@@ -1,16 +1,19 @@
 package com.example
 
+import com.example.model.AndroidSdkLabels
 import org.junit.Assert.*
 import org.junit.Test
 
-/**
- * Example local unit test, which will execute on the development machine (host).
- *
- * See [testing documentation](http://d.android.com/tools/testing).
- */
 class ExampleUnitTest {
   @Test
-  fun addition_isCorrect() {
-    assertEquals(4, 2 + 2)
+  fun sdkLabelsMapSupportedAndroidVersions() {
+    assertEquals("Android 17", AndroidSdkLabels.getName(37))
+    assertEquals("Baklava / 16", AndroidSdkLabels.getName(36))
+    assertEquals("Q / 10", AndroidSdkLabels.getName(29))
+  }
+
+  @Test
+  fun sdkLabelsUseFallbackForOlderVersions() {
+    assertEquals("Lollipop+", AndroidSdkLabels.getName(24))
   }
 }

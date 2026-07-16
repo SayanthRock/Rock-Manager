@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import androidx.core.content.FileProvider
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppBackgroundActivity
@@ -33,6 +34,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.random.Random
@@ -101,12 +103,12 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
 
     fun setThemeMode(mode: String) {
         themeMode.value = mode
-        prefs.edit().putString("theme_mode", mode).apply()
+        prefs.edit { putString("theme_mode", mode) }
     }
 
     fun setKillerMode(mode: String) {
         killerMode.value = mode
-        prefs.edit().putString("killer_mode", mode).apply()
+        prefs.edit { putString("killer_mode", mode) }
     }
 
     fun setSmartFilter(filter: String) {
@@ -130,7 +132,7 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun savePref(key: String, value: Boolean) {
-        prefs.edit().putBoolean(key, value).apply()
+        prefs.edit { putBoolean(key, value) }
         when (key) {
             "sign_output_apk" -> signOutputApk.value = value
             "auto_merge" -> autoMerge.value = value
@@ -151,7 +153,7 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
             current.add(packageName)
         }
         _exclusions.value = current
-        prefs.edit().putStringSet("excluded_apps", current).apply()
+        prefs.edit { putStringSet("excluded_apps", current) }
     }
 
     fun optimizeOneClick() {
@@ -201,7 +203,7 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
                         appName = "One-Click Optimizer",
                         packageName = "com.example.optimizer",
                         changeType = "Background Active",
-                        description = "One-Click Optimization triggered with $modeLabel. Cleared $killedCount active processes, reclaimed ${savedRam}MB system RAM, and reduced CPU load by ${String.format("%.1f", freedCpu)}%."
+                        description = "One-Click Optimization triggered with $modeLabel. Cleared $killedCount active processes, reclaimed ${savedRam}MB system RAM, and reduced CPU load by ${String.format(Locale.getDefault(), "%.1f", freedCpu)}%."
                      )
                 )
             } else {
@@ -311,11 +313,7 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
                             @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
                         },
                         targetSdkVersion = appInfo.targetSdkVersion,
-                        minSdkVersion = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                            appInfo.minSdkVersion
-                        } else {
-                            19
-                        },
+                        minSdkVersion = appInfo.minSdkVersion,
                         baseApkPath = appInfo.sourceDir,
                         splitApkPaths = splits,
                         permissions = permissionsList,
@@ -672,7 +670,12 @@ class AppInspectorViewModel(application: Application) : AndroidViewModel(applica
         if (size <= 0) return "0 B"
         val units = arrayOf("B", "KB", "MB", "GB", "TB")
         val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.toDouble())).toInt()
-        return String.format("%.2f %s", size / Math.pow(1024.toDouble(), digitGroups.toDouble()), units[digitGroups])
+        return String.format(
+            Locale.getDefault(),
+            "%.2f %s",
+            size / Math.pow(1024.toDouble(), digitGroups.toDouble()),
+            units[digitGroups]
+        )
     }
 
     fun loadApkPngAssets(app: InstalledAppInfo, onComplete: (List<ApkPngAsset>) -> Unit) {

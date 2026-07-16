@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -261,7 +263,7 @@ fun AppNavigationBar(
         ) {
             val tabs = listOf(
                 NavigationItem("Home", "Dashboard", Icons.Default.Home),
-                NavigationItem("Apps", "All Apps", Icons.Default.List),
+                NavigationItem("Apps", "All Apps", Icons.AutoMirrored.Filled.List),
                 NavigationItem("Logs", "Logs", Icons.Default.PlayArrow),
                 NavigationItem("Analytics", "Analytics", Icons.Default.Info),
                 NavigationItem("Settings", "Settings", Icons.Default.Settings)
@@ -1019,7 +1021,7 @@ fun AllAppsScreen(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.List,
+                                imageVector = Icons.AutoMirrored.Filled.List,
                                 contentDescription = "Sort Options",
                                 tint = AccentPurple,
                                 modifier = Modifier.size(16.dp)
@@ -2128,7 +2130,7 @@ fun AppDetailsBottomSheet(
                     onClick = {
                         try {
                             val intent = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = android.net.Uri.parse("package:${app.packageName}")
+                                data = "package:${app.packageName}".toUri()
                             }
                             context.startActivity(intent)
                         } catch (e: Exception) {
@@ -2160,13 +2162,13 @@ fun AppDetailsBottomSheet(
                     onClick = {
                         try {
                             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                data = android.net.Uri.parse("market://details?id=${app.packageName}")
+                                data = "market://details?id=${app.packageName}".toUri()
                             }
                             context.startActivity(intent)
                         } catch (e: Exception) {
                             try {
                                 val webIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                    data = android.net.Uri.parse("https://play.google.com/store/apps/details?id=${app.packageName}")
+                                    data = "https://play.google.com/store/apps/details?id=${app.packageName}".toUri()
                                 }
                                 context.startActivity(webIntent)
                             } catch (e2: Exception) {
@@ -3425,7 +3427,7 @@ fun OptimizationControlCenter(viewModel: AppInspectorViewModel) {
                         Text("CPU LOAD", style = MaterialTheme.typography.labelSmall, color = TextSecondary, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "${String.format("%.1f", totalCpuLoad)}%",
+                            text = "${String.format(Locale.getDefault(), "%.1f", totalCpuLoad)}%",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = if (totalCpuLoad > 30f) Color(0xFFD32F2F) else Color(0xFF388E3C)
