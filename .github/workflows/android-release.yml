@@ -125,7 +125,7 @@ jobs:
           mkdir -p release
           apk_name="Rock-Manager-${VERSION_NAME}.apk"
           cp "$apk_path" "release/$apk_name"
-          sha256sum "release/$apk_name" > "release/$apk_name.sha256"
+          (cd release && sha256sum "$apk_name" > "$apk_name.sha256")
           ls -lh release
 
       - name: Upload verified APK artifact
