@@ -1,21 +1,56 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Rock Manager
 
-# Run and deploy your AI Studio app
+[![Android APK Release](https://github.com/SayanthRock/Rock-Manager/actions/workflows/android-release.yml/badge.svg)](https://github.com/SayanthRock/Rock-Manager/actions/workflows/android-release.yml)
+[![Latest release](https://img.shields.io/github/v/release/SayanthRock/Rock-Manager)](https://github.com/SayanthRock/Rock-Manager/releases/latest)
 
-This contains everything you need to run your app locally.
+Rock Manager is an Android app inspector for viewing installed-app metadata, reviewing permissions, extracting APK files, and exploring PNG assets packaged inside APKs.
 
-View your app in AI Studio: https://ai.studio/apps/f8ad281a-4737-465e-88d1-f076739abc48
+## Features
 
-## Run Locally
+- Inspect user and system apps, versions, SDK levels, sizes, and permissions
+- Search and filter apps, including permission-based filtering
+- Extract a base APK or package split APKs into a ZIP archive
+- Select multiple apps for batch extraction
+- Preview, save, and share PNG assets found inside APK files
+- Keep local extraction and activity logs with light, dark, and dynamic themes
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+## Download
 
+Download the latest verified APK and SHA-256 checksum from [GitHub Releases](https://github.com/SayanthRock/Rock-Manager/releases/latest).
 
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
+Rock Manager supports Android 7.0 and newer (API 24+).
+
+## Build locally
+
+Requirements:
+
+- JDK 17
+- Android SDK platform 36.1
+- Android SDK Build Tools 36.1.0
+
+```bash
+./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
+```
+
+The APK is written to `app/build/outputs/apk/release/`.
+
+## Release signing
+
+The release workflow supports a private production keystore through these repository secrets:
+
+| Secret | Purpose |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | Base64-encoded JKS/PKCS12 keystore |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | Signing key alias |
+| `ANDROID_KEY_PASSWORD` | Signing key password |
+
+If none of the four secrets exists, CI produces an installable debug-signed APK. If only some are configured, the workflow stops instead of creating an incorrectly signed release.
+
+## Privacy and permissions
+
+App inspection happens on-device. Extracted APKs are stored in the app's private storage until you explicitly share them. `QUERY_ALL_PACKAGES` is required because listing installed applications is Rock Manager's core function.
+
+## License
+
+No license has been declared yet. All rights remain with the repository owner unless a license file is added.

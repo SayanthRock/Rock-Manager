@@ -1,0 +1,160 @@
+name: Android APK Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (for example, v1.1.0). Leave blank to generate one."
+        required: false
+        default: ""
+      create_release:
+        description: "Create a GitHub Release after verification"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-release-apk:
+    name: Verify and build release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36.1" \
+            "build-tools;36.1.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Resolve build version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            release_tag="$GITHUB_REF_NAME"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${{ inputs.tag_name }}" ]]; then
+            release_tag="${{ inputs.tag_name }}"
+          else
+            release_tag="v1.0.${GITHUB_RUN_NUMBER}"
+          fi
+
+          version_name="${release_tag#v}"
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=$version_name" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Configure APK signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          values=(
+            "$ANDROID_KEYSTORE_BASE64"
+            "$ANDROID_KEYSTORE_PASSWORD"
+            "$ANDROID_KEY_ALIAS"
+            "$ANDROID_KEY_PASSWORD"
+          )
+          configured=0
+          for value in "${values[@]}"; do
+            if [[ -n "$value" ]]; then
+              configured=$((configured + 1))
+            fi
+          done
+
+          if [[ "$configured" -eq 0 ]]; then
+            echo "SIGNING_MODE=debug" >> "$GITHUB_ENV"
+            echo "No release-signing secrets found; using the Android debug key."
+          elif [[ "$configured" -ne 4 ]]; then
+            echo "Release signing is only partially configured. Add all four Android signing secrets."
+            exit 1
+          else
+            keystore_path="$RUNNER_TEMP/rock-manager-release.jks"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+            echo "KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
+            echo "STORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "SIGNING_MODE=release" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run tests, lint, and build
+        shell: bash
+        run: ./gradlew --no-daemon --no-build-cache clean :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
+
+      - name: Prepare APK and checksum
+        shell: bash
+        run: |
+          apk_path="$(find app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
+          if [[ -z "$apk_path" ]]; then
+            echo "Release APK was not generated."
+            exit 1
+          fi
+
+          mkdir -p release
+          apk_name="Rock-Manager-${VERSION_NAME}.apk"
+          cp "$apk_path" "release/$apk_name"
+          sha256sum "release/$apk_name" > "release/$apk_name.sha256"
+          ls -lh release
+
+      - name: Upload verified APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rock-Manager-${{ env.VERSION_NAME }}-APK
+          path: release/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.create_release)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Rock Manager ${{ env.RELEASE_TAG }}
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          make_latest: true
+
+      - name: Write build summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Rock Manager APK"
+            echo "- Version: ${VERSION_NAME:-not resolved}"
+            echo "- Version code: ${VERSION_CODE:-not resolved}"
+            echo "- Signing mode: ${SIGNING_MODE:-not configured}"
+            echo "- Commit: $GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
